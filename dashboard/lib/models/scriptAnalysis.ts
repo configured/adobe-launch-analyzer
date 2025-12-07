@@ -29,6 +29,9 @@ export async function getCachedAnalysis(
 ): Promise<ScriptAnalysisDocument | null> {
   try {
     const collection = await getCollection(COLLECTION_NAME)
+    if (!collection) {
+      return null // MongoDB not configured
+    }
     const result = await collection.findOne({
       scriptUrl,
       scriptHash
@@ -46,6 +49,10 @@ export async function saveAnalysis(
 ): Promise<void> {
   try {
     const collection = await getCollection(COLLECTION_NAME)
+    if (!collection) {
+      console.log('MongoDB not configured, skipping cache save')
+      return // MongoDB not configured, skip silently
+    }
     const now = new Date()
 
     await collection.updateOne(
@@ -76,6 +83,10 @@ export async function saveAnalysis(
 export async function createIndexes(): Promise<void> {
   try {
     const collection = await getCollection(COLLECTION_NAME)
+    if (!collection) {
+      console.log('MongoDB not configured, skipping index creation')
+      return
+    }
     await collection.createIndex({ scriptUrl: 1, scriptHash: 1 }, { unique: true })
     await collection.createIndex({ createdAt: -1 })
     console.log('Indexes created for script-analyses collection')
@@ -91,6 +102,12 @@ export async function getAnalysisStats(): Promise<{
 }> {
   try {
     const collection = await getCollection(COLLECTION_NAME)
+    if (!collection) {
+      return {
+        totalAnalyses: 0,
+        uniqueScripts: 0
+      }
+    }
     const totalAnalyses = await collection.countDocuments()
     const uniqueScripts = (await collection.distinct('scriptUrl')).length
 

@@ -37,10 +37,44 @@ export async function POST(request: NextRequest) {
       timeout: 30000,
       headers: {
         'User-Agent': 'Mozilla/5.0 (compatible; Adobe-DTM-Analyzer/1.0)'
-      }
+      },
+      validateStatus: (status) => status >= 200 && status < 300
     })
 
     const scriptContent = response.data
+
+    // Validate that we received JavaScript, not HTML
+    if (typeof scriptContent !== 'string') {
+      return NextResponse.json(
+        { success: false, error: 'Invalid response: expected text content' },
+        { status: 400 }
+      )
+    }
+
+    // Check if response is HTML instead of JavaScript
+    if (scriptContent.trim().toLowerCase().startsWith('<!doctype') ||
+        scriptContent.trim().toLowerCase().startsWith('<html')) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'URL returned HTML instead of JavaScript. Please verify the script URL is correct.'
+        },
+        { status: 400 }
+      )
+    }
+
+    // Check content type if available
+    const contentType = response.headers['content-type'] || ''
+    if (contentType.includes('text/html')) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'URL returned HTML (text/html) instead of JavaScript. Please verify the script URL.'
+        },
+        { status: 400 }
+      )
+    }
+
     console.log('Script fetched, length:', scriptContent.length)
 
     // Generate hash of script content for cache lookup
