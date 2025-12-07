@@ -94,6 +94,8 @@ export async function POST(request: NextRequest) {
             originalContent: cached.originalContent,
             gzippedSize: cached.gzippedSize,
             analysis: cached.analysis,
+            externalServices: cached.externalServices || [],
+            loadsScripts: cached.loadsScripts || false,
             truncated: cached.truncated,
             cached: true
           })
@@ -200,34 +202,96 @@ export async function POST(request: NextRequest) {
 
     console.log('Sending to OpenAI for analysis...')
 
-    // Analyze with OpenAI
+    // Analyze with OpenAI using structured output
     const completion = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: [
         {
           role: 'system',
-          content: `You are an expert at analyzing Adobe Launch/DTM tracking scripts. Analyze the provided JavaScript code and explain:
+          content: `You are an expert at analyzing Adobe Launch/DTM tracking scripts. Analyze the provided JavaScript code and return a JSON object with the following structure:
 
-1. **Purpose**: What is this script doing? (e.g., tracking events, setting cookies, making API calls)
-2. **Key Actions**: List the main operations it performs
-3. **Data Collection**: What data is being collected or sent?
-4. **External Services**: What third-party services or APIs does it interact with?
-5. **Privacy Considerations**: Are there any privacy-related actions (cookies, tracking, PII)?
+{
+  "summary": "Brief summary of what this script does",
+  "purpose": "What is this script doing? (e.g., tracking events, setting cookies, making API calls)",
+  "keyActions": ["List", "of", "main", "operations"],
+  "dataCollection": "What data is being collected or sent?",
+  "externalServices": ["List", "of", "third-party", "services", "or", "APIs"],
+  "loadsScripts": true/false (whether it dynamically loads other scripts via createElement, insertBefore, appendChild, etc.),
+  "privacyConsiderations": "Privacy-related actions (cookies, tracking, PII)"
+}
 
-Provide a clear, concise summary that a non-technical person can understand, followed by technical details.`
+Be thorough in identifying external services - look for domain names, API endpoints, CDN URLs, and third-party service names.`
         },
         {
           role: 'user',
           content: `Analyze this Adobe Launch action script:\n\n${truncatedScript}`
         }
       ],
+      response_format: { type: "json_object" },
       temperature: 0.3,
       max_tokens: 1500
     })
 
-    const analysis = completion.choices[0]?.message?.content || 'No analysis generated'
+    const responseText = completion.choices[0]?.message?.content || '{}'
+    let parsedAnalysis: any
+    let externalServices: string[] = []
+    let loadsScripts = false
 
-    console.log('Analysis complete')
+    try {
+      parsedAnalysis = JSON.parse(responseText)
+      externalServices = parsedAnalysis.externalServices || []
+      loadsScripts = parsedAnalysis.loadsScripts || false
+    } catch (parseError) {
+      console.error('Failed to parse OpenAI JSON response:', parseError)
+      parsedAnalysis = { summary: responseText }
+    }
+
+    // Also check script content directly for script loading patterns
+    const scriptLoadingPatterns = [
+      /createElement\s*\(\s*['"]script['"]/i,
+      /\.src\s*=/i,
+      /insertBefore\s*\(/i,
+      /appendChild\s*\(/i,
+      /document\.write\s*\(\s*['"]<script/i,
+      /\.async\s*=/i
+    ]
+
+    const hasScriptLoadingCode = scriptLoadingPatterns.some(pattern => pattern.test(extractedCode))
+    if (hasScriptLoadingCode && !loadsScripts) {
+      console.log('Script loading detected in code analysis')
+      loadsScripts = true
+    }
+
+    // Format the analysis as markdown for display
+    const analysis = `## Summary
+${parsedAnalysis.summary || 'No summary available'}
+
+## Purpose
+${parsedAnalysis.purpose || 'Not analyzed'}
+
+## Key Actions
+${Array.isArray(parsedAnalysis.keyActions)
+  ? parsedAnalysis.keyActions.map((action: string) => `- ${action}`).join('\n')
+  : parsedAnalysis.keyActions || 'None identified'}
+
+## Data Collection
+${parsedAnalysis.dataCollection || 'No data collection identified'}
+
+## External Services
+${externalServices.length > 0
+  ? externalServices.map((service: string) => `- ${service}`).join('\n')
+  : 'None identified'}
+
+## Dynamically Loads Scripts
+${loadsScripts ? '✓ Yes - This script dynamically loads other scripts' : '✗ No - Does not load external scripts'}
+
+## Privacy Considerations
+${parsedAnalysis.privacyConsiderations || 'No specific privacy concerns identified'}`
+
+    console.log('Analysis complete:', {
+      externalServices: externalServices.length,
+      loadsScripts
+    })
 
     // Calculate gzipped size
     let gzippedSize = 0
@@ -248,6 +312,8 @@ Provide a clear, concise summary that a non-technical person can understand, fol
           scriptLength: scriptContent.length,
           gzippedSize,
           analysis,
+          externalServices,
+          loadsScripts,
           scriptContent: beautifiedScript,
           originalContent: scriptContent,
           truncated: scriptContent.length > maxLength
@@ -267,6 +333,8 @@ Provide a clear, concise summary that a non-technical person can understand, fol
       originalContent: scriptContent, // Include original minified version
       gzippedSize, // Include gzipped size
       analysis,
+      externalServices, // List of external services detected
+      loadsScripts, // Whether it loads scripts dynamically
       truncated: scriptContent.length > maxLength,
       cached: false
     })

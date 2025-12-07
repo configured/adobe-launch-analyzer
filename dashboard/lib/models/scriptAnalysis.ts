@@ -8,6 +8,8 @@ export interface ScriptAnalysisDocument {
   scriptLength: number
   gzippedSize: number
   analysis: string
+  externalServices: string[] // List of external services/APIs detected
+  loadsScripts: boolean // Whether the script dynamically loads other scripts
   scriptContent: string // Beautified version
   originalContent: string // Original minified version
   truncated: boolean
