@@ -1,0 +1,108 @@
+import { getCollection } from '../mongodb'
+import crypto from 'crypto'
+
+export interface ScriptAnalysisDocument {
+  _id?: string
+  scriptUrl: string
+  scriptHash: string // Hash of script content for cache invalidation
+  scriptLength: number
+  gzippedSize: number
+  analysis: string
+  scriptContent: string // Beautified version
+  originalContent: string // Original minified version
+  truncated: boolean
+  createdAt: Date
+  updatedAt: Date
+}
+
+const COLLECTION_NAME = 'script-analyses'
+
+// Generate hash of script content for cache key
+export function generateScriptHash(content: string): string {
+  return crypto.createHash('sha256').update(content).digest('hex')
+}
+
+// Get cached analysis by URL and script hash
+export async function getCachedAnalysis(
+  scriptUrl: string,
+  scriptHash: string
+): Promise<ScriptAnalysisDocument | null> {
+  try {
+    const collection = await getCollection(COLLECTION_NAME)
+    const result = await collection.findOne({
+      scriptUrl,
+      scriptHash
+    })
+    return result as ScriptAnalysisDocument | null
+  } catch (error) {
+    console.error('Error getting cached analysis:', error)
+    return null
+  }
+}
+
+// Save or update analysis result
+export async function saveAnalysis(
+  data: Omit<ScriptAnalysisDocument, '_id' | 'createdAt' | 'updatedAt'>
+): Promise<void> {
+  try {
+    const collection = await getCollection(COLLECTION_NAME)
+    const now = new Date()
+
+    await collection.updateOne(
+      {
+        scriptUrl: data.scriptUrl,
+        scriptHash: data.scriptHash
+      },
+      {
+        $set: {
+          ...data,
+          updatedAt: now
+        },
+        $setOnInsert: {
+          createdAt: now
+        }
+      },
+      { upsert: true }
+    )
+
+    console.log(`Analysis saved for ${data.scriptUrl}`)
+  } catch (error) {
+    console.error('Error saving analysis:', error)
+    throw error
+  }
+}
+
+// Create index on scriptUrl and scriptHash for fast lookups
+export async function createIndexes(): Promise<void> {
+  try {
+    const collection = await getCollection(COLLECTION_NAME)
+    await collection.createIndex({ scriptUrl: 1, scriptHash: 1 }, { unique: true })
+    await collection.createIndex({ createdAt: -1 })
+    console.log('Indexes created for script-analyses collection')
+  } catch (error) {
+    console.error('Error creating indexes:', error)
+  }
+}
+
+// Get analysis statistics
+export async function getAnalysisStats(): Promise<{
+  totalAnalyses: number
+  uniqueScripts: number
+}> {
+  try {
+    const collection = await getCollection(COLLECTION_NAME)
+    const totalAnalyses = await collection.countDocuments()
+    const uniqueScripts = (await collection.distinct('scriptUrl')).length
+
+    return {
+      totalAnalyses,
+      uniqueScripts
+    }
+  } catch (error) {
+    console.error('Error getting analysis stats:', error)
+    return {
+      totalAnalyses: 0,
+      uniqueScripts: 0
+    }
+  }
+}

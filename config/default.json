@@ -1,0 +1,34 @@
+{
+  "browser": {
+    "headless": true,
+    "timeout": 30000,
+    "userAgent": "Mozilla/5.0 (compatible; AdobeDTMExtractor/1.0)"
+  },
+  "discovery": {
+    "maxDepth": 3,
+    "followExtensions": true,
+    "timeout": 10000
+  },
+  "extraction": {
+    "preferBrowser": true,
+    "fallbackToStatic": true,
+    "extractDataElements": true,
+    "extractExtensions": true
+  },
+  "output": {
+    "directory": "./output",
+    "formats": ["json", "csv", "markdown"],
+    "prettify": true,
+    "timestamp": true
+  },
+  "logging": {
+    "level": "info",
+    "console": true,
+    "file": false
+  },
+  "retry": {
+    "maxAttempts": 3,
+    "backoff": "exponential",
+    "initialDelay": 1000
+  }
+}
