@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect, type ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -73,6 +73,15 @@ function formatEventType(eventType: string): string {
     .trim()
 }
 
+const RECENT_URLS_KEY = 'adobe-launch-recent-urls'
+const MAX_RECENT_URLS = 10
+
+interface RecentUrl {
+  url: string
+  analyzedAt: string
+  ruleCount?: number
+}
+
 export default function Home() {
   const [data, setData] = useState<AdobeData | null>(null)
   const [searchTerm, setSearchTerm] = useState('')
@@ -81,6 +90,54 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null)
   const [scriptAnalyses, setScriptAnalyses] = useState<ScriptAnalysis>({})
   const [selectedEventType, setSelectedEventType] = useState<string>('all')
+  const [recentUrls, setRecentUrls] = useState<RecentUrl[]>([])
+
+  // Load recent URLs from localStorage on mount
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem(RECENT_URLS_KEY)
+      if (stored) {
+        setRecentUrls(JSON.parse(stored))
+      }
+    } catch (e) {
+      console.error('Failed to load recent URLs:', e)
+    }
+  }, [])
+
+  // Save a URL to recent URLs
+  const saveRecentUrl = (analyzedUrl: string, ruleCount?: number) => {
+    setRecentUrls(prev => {
+      // Remove if already exists
+      const filtered = prev.filter(r => r.url !== analyzedUrl)
+      // Add to front
+      const newRecent: RecentUrl = {
+        url: analyzedUrl,
+        analyzedAt: new Date().toISOString(),
+        ruleCount
+      }
+      const updated = [newRecent, ...filtered].slice(0, MAX_RECENT_URLS)
+      // Save to localStorage
+      try {
+        localStorage.setItem(RECENT_URLS_KEY, JSON.stringify(updated))
+      } catch (e) {
+        console.error('Failed to save recent URLs:', e)
+      }
+      return updated
+    })
+  }
+
+  // Remove a URL from recent URLs
+  const removeRecentUrl = (urlToRemove: string) => {
+    setRecentUrls(prev => {
+      const updated = prev.filter(r => r.url !== urlToRemove)
+      try {
+        localStorage.setItem(RECENT_URLS_KEY, JSON.stringify(updated))
+      } catch (e) {
+        console.error('Failed to save recent URLs:', e)
+      }
+      return updated
+    })
+  }
 
   const handleUrlExtract = async () => {
     if (!url.trim()) {
@@ -108,6 +165,8 @@ export default function Home() {
       }
 
       setData(result)
+      // Save to recent URLs
+      saveRecentUrl(url.trim(), result.metadata?.ruleCount)
       setUrl('')
     } catch (error: any) {
       console.error('Error extracting from URL:', error)
@@ -276,7 +335,7 @@ export default function Home() {
     return complexity
   }
 
-  const renderValue = (value: any, depth = 0, parentKey?: string): JSX.Element => {
+  const renderValue = (value: any, depth = 0, parentKey?: string): ReactNode => {
     if (value === null || value === undefined) {
       return <span className="text-muted-foreground">null</span>
     }
@@ -409,7 +468,7 @@ export default function Home() {
                                     fontSize: '0.75rem'
                                   }}
                                 >
-                                  {analysis.showOriginal ? analysis.originalContent : analysis.scriptContent}
+                                  {(analysis.showOriginal ? analysis.originalContent : analysis.scriptContent) || ''}
                                 </SyntaxHighlighter>
                               </div>
                             </div>
@@ -647,7 +706,7 @@ export default function Home() {
                                                         fontSize: '0.75rem'
                                                       }}
                                                     >
-                                                      {analysis.showOriginal ? analysis.originalContent : analysis.scriptContent}
+                                                      {(analysis.showOriginal ? analysis.originalContent : analysis.scriptContent) || ''}
                                                     </SyntaxHighlighter>
                                                   </div>
                                                 </div>
@@ -773,6 +832,57 @@ export default function Home() {
                     <div className="text-sm text-muted-foreground">
                       Enter an Adobe Launch library URL (e.g., https://assets.adobedtm.com/xxx/xxx/launch-xxx.min.js)
                     </div>
+
+                    {/* Recent URLs */}
+                    {recentUrls.length > 0 && (
+                      <div className="border-t pt-4 mt-4">
+                        <div className="text-sm font-medium mb-3">Recent URLs</div>
+                        <div className="space-y-2">
+                          {recentUrls.map((recent, index) => (
+                            <div
+                              key={index}
+                              className="flex items-center justify-between gap-2 p-2 bg-muted/50 rounded-md hover:bg-muted transition-colors group"
+                            >
+                              <button
+                                className="flex-1 text-left"
+                                onClick={() => {
+                                  setUrl(recent.url)
+                                }}
+                                disabled={loading}
+                              >
+                                <div className="text-sm font-medium truncate text-primary hover:underline">
+                                  {recent.url}
+                                </div>
+                                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                                  <span>{new Date(recent.analyzedAt).toLocaleDateString()}</span>
+                                  {recent.ruleCount !== undefined && (
+                                    <>
+                                      <span>•</span>
+                                      <span>{recent.ruleCount} rules</span>
+                                    </>
+                                  )}
+                                </div>
+                              </button>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="opacity-0 group-hover:opacity-100 transition-opacity h-8 w-8 p-0"
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  removeRecentUrl(recent.url)
+                                }}
+                              >
+                                <span className="sr-only">Remove</span>
+                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                  <path d="M18 6 6 18" />
+                                  <path d="m6 6 12 12" />
+                                </svg>
+                              </Button>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </TabsContent>
 
@@ -899,50 +1009,18 @@ export default function Home() {
                 </Button>
               </div>
 
-              {eventTypes.length > 0 && (
-                <div className="flex items-center gap-4">
-                  <label className="text-sm font-medium whitespace-nowrap">Filter by Event Type:</label>
-                  <Select value={selectedEventType} onValueChange={setSelectedEventType}>
-                    <SelectTrigger className="w-[280px]">
-                      <SelectValue placeholder="All Event Types" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">All Event Types ({data?.rules?.length || 0})</SelectItem>
-                      {eventTypes.map((eventType) => {
-                        const ruleCount = data?.rules?.filter(rule =>
-                          rule.events?.some((event: any) => getEventTypeFromPath(event.modulePath) === eventType)
-                        ).length || 0
-                        return (
-                          <SelectItem key={eventType} value={eventType}>
-                            {formatEventType(eventType)} ({ruleCount})
-                          </SelectItem>
-                        )
-                      })}
-                    </SelectContent>
-                  </Select>
-                  {selectedEventType !== 'all' && (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => setSelectedEventType('all')}
-                    >
-                      Clear Filter
-                    </Button>
-                  )}
-                </div>
-              )}
             </div>
 
-            <Tabs defaultValue="rules" className="w-full">
-              <TabsList className="grid w-full grid-cols-3">
+            <Tabs defaultValue="concept" className="w-full">
+              <TabsList className="grid w-full grid-cols-4">
+                <TabsTrigger value="concept">Concept</TabsTrigger>
                 <TabsTrigger value="rules">Rules ({filteredRules?.length || 0})</TabsTrigger>
                 <TabsTrigger value="dataElements">Data Elements ({filteredDataElements.length})</TabsTrigger>
                 <TabsTrigger value="extensions">Extensions ({filteredExtensions.length})</TabsTrigger>
               </TabsList>
 
-              <TabsContent value="rules" className="space-y-4">
-                {/* Event Timeline Visualization */}
-                <Card id="event-timeline" className="bg-gradient-to-br from-blue-50 to-purple-50 dark:from-blue-950 dark:to-purple-950 border-2">
+              <TabsContent value="concept" className="space-y-4">
+                <Card className="bg-gradient-to-br from-blue-50 to-purple-50 dark:from-blue-950 dark:to-purple-950 border-2">
                   <CardHeader>
                     <CardTitle className="flex items-center gap-2">
                       <span>Adobe Launch Event Timeline</span>
@@ -950,150 +1028,153 @@ export default function Home() {
                     </CardTitle>
                   </CardHeader>
                   <CardContent>
-                    <Tabs defaultValue="timeline" className="w-full">
-                      <TabsList className="grid w-full grid-cols-2 mb-4">
-                        <TabsTrigger value="timeline">Timeline View</TabsTrigger>
-                        <TabsTrigger value="byrules">Rules by Event</TabsTrigger>
-                      </TabsList>
-
-                      <TabsContent value="timeline" className="space-y-3">
-                      {/* Timeline Items */}
-                      <div className="flex flex-col space-y-3">
-                        {/* Script Loaded */}
-                        <div className="flex items-center gap-4">
-                          <div className="w-8 h-8 rounded-full bg-blue-500 text-white flex items-center justify-center font-bold text-sm flex-shrink-0">
-                            ↓
-                          </div>
-                          <div className="flex-1 bg-white dark:bg-gray-900 rounded-lg p-3 border-l-4 border-blue-500">
-                            <div className="font-semibold text-sm">Adobe Launch Script Loaded</div>
-                            <div className="text-xs text-muted-foreground">Script downloads and initializes</div>
-                          </div>
+                    <div className="flex flex-col space-y-3">
+                      {/* Script Loaded */}
+                      <div className="flex items-center gap-4">
+                        <div className="w-8 h-8 rounded-full bg-blue-500 text-white flex items-center justify-center font-bold text-sm flex-shrink-0">
+                          ↓
                         </div>
-
-                        {/* Library Loaded */}
-                        <div className="flex items-center gap-4">
-                          <div className="w-8 h-8 rounded-full bg-blue-600 text-white flex items-center justify-center font-bold text-sm flex-shrink-0">
-                            1
-                          </div>
-                          <div className="flex-1 bg-white dark:bg-gray-900 rounded-lg p-3 border-l-4 border-blue-600">
-                            <div className="font-semibold text-sm">libraryLoaded</div>
-                            <div className="text-xs text-muted-foreground">First event - library initialization complete</div>
-                          </div>
-                        </div>
-
-                        {/* Page Top */}
-                        <div className="flex items-center gap-4">
-                          <div className="w-8 h-8 rounded-full bg-indigo-600 text-white flex items-center justify-center font-bold text-sm flex-shrink-0">
-                            2
-                          </div>
-                          <div className="flex-1 bg-white dark:bg-gray-900 rounded-lg p-3 border-l-4 border-indigo-600">
-                            <div className="font-semibold text-sm">pageTop</div>
-                            <div className="text-xs text-muted-foreground">Fires at top of page (synchronous)</div>
-                          </div>
-                        </div>
-
-                        {/* Browser Parsing */}
-                        <div className="flex items-center gap-4">
-                          <div className="w-8 h-8 rounded-full bg-gray-400 text-white flex items-center justify-center font-bold text-sm flex-shrink-0">
-                            ⏳
-                          </div>
-                          <div className="flex-1 bg-gray-100 dark:bg-gray-800 rounded-lg p-3 border-l-4 border-gray-400 border-dashed">
-                            <div className="font-semibold text-sm italic">Browser Parsing HTML</div>
-                            <div className="text-xs text-muted-foreground">Browser renders page content</div>
-                          </div>
-                        </div>
-
-                        {/* Page Bottom */}
-                        <div className="flex items-center gap-4">
-                          <div className="w-8 h-8 rounded-full bg-purple-600 text-white flex items-center justify-center font-bold text-sm flex-shrink-0">
-                            3
-                          </div>
-                          <div className="flex-1 bg-white dark:bg-gray-900 rounded-lg p-3 border-l-4 border-purple-600">
-                            <div className="font-semibold text-sm">pageBottom</div>
-                            <div className="text-xs text-muted-foreground">Fires at bottom of page (synchronous)</div>
-                          </div>
-                        </div>
-
-                        {/* DOM Ready */}
-                        <div className="flex items-center gap-4">
-                          <div className="w-8 h-8 rounded-full bg-pink-600 text-white flex items-center justify-center font-bold text-sm flex-shrink-0">
-                            4
-                          </div>
-                          <div className="flex-1 bg-white dark:bg-gray-900 rounded-lg p-3 border-l-4 border-pink-600">
-                            <div className="font-semibold text-sm">domReady</div>
-                            <div className="text-xs text-muted-foreground">DOMContentLoaded - HTML parsed, DOM ready</div>
-                          </div>
-                        </div>
-
-                        {/* Window Loaded */}
-                        <div className="flex items-center gap-4">
-                          <div className="w-8 h-8 rounded-full bg-red-600 text-white flex items-center justify-center font-bold text-sm flex-shrink-0">
-                            5
-                          </div>
-                          <div className="flex-1 bg-white dark:bg-gray-900 rounded-lg p-3 border-l-4 border-red-600">
-                            <div className="font-semibold text-sm">windowLoaded</div>
-                            <div className="text-xs text-muted-foreground">Window load - all resources loaded (images, CSS, etc.)</div>
-                          </div>
-                        </div>
-
-                        {/* Runtime Events Section */}
-                        <div className="flex items-center gap-4 mt-4">
-                          <div className="w-8 h-8 rounded-full bg-gray-400 text-white flex items-center justify-center font-bold text-sm flex-shrink-0">
-                            ⚡
-                          </div>
-                          <div className="flex-1 bg-gray-100 dark:bg-gray-800 rounded-lg p-3 border-l-4 border-gray-400">
-                            <div className="font-semibold text-sm italic">Runtime Events (Anytime After Load)</div>
-                            <div className="text-xs text-muted-foreground">Events that can fire at any point during user session</div>
-                          </div>
-                        </div>
-
-                        {/* Direct Call */}
-                        <div className="flex items-center gap-4 ml-12">
-                          <div className="w-8 h-8 rounded-full bg-orange-500 text-white flex items-center justify-center font-bold text-sm flex-shrink-0">
-                            6
-                          </div>
-                          <div className="flex-1 bg-white dark:bg-gray-900 rounded-lg p-3 border-l-4 border-orange-500">
-                            <div className="font-semibold text-sm">directCall</div>
-                            <div className="text-xs text-muted-foreground">Triggered via _satellite.track() - developer-controlled</div>
-                          </div>
-                        </div>
-
-                        {/* Custom Event */}
-                        <div className="flex items-center gap-4 ml-12">
-                          <div className="w-8 h-8 rounded-full bg-amber-500 text-white flex items-center justify-center font-bold text-sm flex-shrink-0">
-                            7
-                          </div>
-                          <div className="flex-1 bg-white dark:bg-gray-900 rounded-lg p-3 border-l-4 border-amber-500">
-                            <div className="font-semibold text-sm">customEvent</div>
-                            <div className="text-xs text-muted-foreground">Custom JavaScript events dispatched to window</div>
-                          </div>
-                        </div>
-
-                        {/* User Driven Events */}
-                        <div className="flex items-center gap-4 ml-12">
-                          <div className="w-8 h-8 rounded-full bg-green-500 text-white flex items-center justify-center font-bold text-sm flex-shrink-0">
-                            8
-                          </div>
-                          <div className="flex-1 bg-white dark:bg-gray-900 rounded-lg p-3 border-l-4 border-green-500">
-                            <div className="font-semibold text-sm">User-Driven Events</div>
-                            <div className="text-xs text-muted-foreground">click, change, submit, focus, hover, keypress - triggered by user interaction</div>
-                          </div>
-                        </div>
-
-                        {/* Runtime Driven Events */}
-                        <div className="flex items-center gap-4 ml-12">
-                          <div className="w-8 h-8 rounded-full bg-teal-500 text-white flex items-center justify-center font-bold text-sm flex-shrink-0">
-                            9
-                          </div>
-                          <div className="flex-1 bg-white dark:bg-gray-900 rounded-lg p-3 border-l-4 border-teal-500">
-                            <div className="font-semibold text-sm">Runtime-Driven Events</div>
-                            <div className="text-xs text-muted-foreground">enterViewport, timeOnPage, media events - triggered by browser/system conditions</div>
-                          </div>
+                        <div className="flex-1 bg-white dark:bg-gray-900 rounded-lg p-3 border-l-4 border-blue-500">
+                          <div className="font-semibold text-sm">Adobe Launch Script Loaded</div>
+                          <div className="text-xs text-muted-foreground">Script downloads and initializes</div>
                         </div>
                       </div>
-                      </TabsContent>
 
-                      <TabsContent value="byrules">
+                      {/* Library Loaded */}
+                      <div className="flex items-center gap-4">
+                        <div className="w-8 h-8 rounded-full bg-blue-600 text-white flex items-center justify-center font-bold text-sm flex-shrink-0">
+                          1
+                        </div>
+                        <div className="flex-1 bg-white dark:bg-gray-900 rounded-lg p-3 border-l-4 border-blue-600">
+                          <div className="font-semibold text-sm">libraryLoaded</div>
+                          <div className="text-xs text-muted-foreground">First event - library initialization complete</div>
+                        </div>
+                      </div>
+
+                      {/* Page Top */}
+                      <div className="flex items-center gap-4">
+                        <div className="w-8 h-8 rounded-full bg-indigo-600 text-white flex items-center justify-center font-bold text-sm flex-shrink-0">
+                          2
+                        </div>
+                        <div className="flex-1 bg-white dark:bg-gray-900 rounded-lg p-3 border-l-4 border-indigo-600">
+                          <div className="font-semibold text-sm">pageTop</div>
+                          <div className="text-xs text-muted-foreground">Fires at top of page (synchronous)</div>
+                        </div>
+                      </div>
+
+                      {/* Browser Parsing */}
+                      <div className="flex items-center gap-4">
+                        <div className="w-8 h-8 rounded-full bg-gray-400 text-white flex items-center justify-center font-bold text-sm flex-shrink-0">
+                          ⏳
+                        </div>
+                        <div className="flex-1 bg-gray-100 dark:bg-gray-800 rounded-lg p-3 border-l-4 border-gray-400 border-dashed">
+                          <div className="font-semibold text-sm italic">Browser Parsing HTML</div>
+                          <div className="text-xs text-muted-foreground">Browser renders page content</div>
+                        </div>
+                      </div>
+
+                      {/* Page Bottom */}
+                      <div className="flex items-center gap-4">
+                        <div className="w-8 h-8 rounded-full bg-purple-600 text-white flex items-center justify-center font-bold text-sm flex-shrink-0">
+                          3
+                        </div>
+                        <div className="flex-1 bg-white dark:bg-gray-900 rounded-lg p-3 border-l-4 border-purple-600">
+                          <div className="font-semibold text-sm">pageBottom</div>
+                          <div className="text-xs text-muted-foreground">Fires at bottom of page (synchronous)</div>
+                        </div>
+                      </div>
+
+                      {/* DOM Ready */}
+                      <div className="flex items-center gap-4">
+                        <div className="w-8 h-8 rounded-full bg-pink-600 text-white flex items-center justify-center font-bold text-sm flex-shrink-0">
+                          4
+                        </div>
+                        <div className="flex-1 bg-white dark:bg-gray-900 rounded-lg p-3 border-l-4 border-pink-600">
+                          <div className="font-semibold text-sm">domReady</div>
+                          <div className="text-xs text-muted-foreground">DOMContentLoaded - HTML parsed, DOM ready</div>
+                        </div>
+                      </div>
+
+                      {/* Window Loaded */}
+                      <div className="flex items-center gap-4">
+                        <div className="w-8 h-8 rounded-full bg-red-600 text-white flex items-center justify-center font-bold text-sm flex-shrink-0">
+                          5
+                        </div>
+                        <div className="flex-1 bg-white dark:bg-gray-900 rounded-lg p-3 border-l-4 border-red-600">
+                          <div className="font-semibold text-sm">windowLoaded</div>
+                          <div className="text-xs text-muted-foreground">Window load - all resources loaded (images, CSS, etc.)</div>
+                        </div>
+                      </div>
+
+                      {/* Runtime Events Section */}
+                      <div className="flex items-center gap-4 mt-4">
+                        <div className="w-8 h-8 rounded-full bg-gray-400 text-white flex items-center justify-center font-bold text-sm flex-shrink-0">
+                          ⚡
+                        </div>
+                        <div className="flex-1 bg-gray-100 dark:bg-gray-800 rounded-lg p-3 border-l-4 border-gray-400">
+                          <div className="font-semibold text-sm italic">Runtime Events (Anytime After Load)</div>
+                          <div className="text-xs text-muted-foreground">Events that can fire at any point during user session</div>
+                        </div>
+                      </div>
+
+                      {/* Direct Call */}
+                      <div className="flex items-center gap-4 ml-12">
+                        <div className="w-8 h-8 rounded-full bg-orange-500 text-white flex items-center justify-center font-bold text-sm flex-shrink-0">
+                          6
+                        </div>
+                        <div className="flex-1 bg-white dark:bg-gray-900 rounded-lg p-3 border-l-4 border-orange-500">
+                          <div className="font-semibold text-sm">directCall</div>
+                          <div className="text-xs text-muted-foreground">Triggered via _satellite.track() - developer-controlled</div>
+                        </div>
+                      </div>
+
+                      {/* Custom Event */}
+                      <div className="flex items-center gap-4 ml-12">
+                        <div className="w-8 h-8 rounded-full bg-amber-500 text-white flex items-center justify-center font-bold text-sm flex-shrink-0">
+                          7
+                        </div>
+                        <div className="flex-1 bg-white dark:bg-gray-900 rounded-lg p-3 border-l-4 border-amber-500">
+                          <div className="font-semibold text-sm">customEvent</div>
+                          <div className="text-xs text-muted-foreground">Custom JavaScript events dispatched to window</div>
+                        </div>
+                      </div>
+
+                      {/* User Driven Events */}
+                      <div className="flex items-center gap-4 ml-12">
+                        <div className="w-8 h-8 rounded-full bg-green-500 text-white flex items-center justify-center font-bold text-sm flex-shrink-0">
+                          8
+                        </div>
+                        <div className="flex-1 bg-white dark:bg-gray-900 rounded-lg p-3 border-l-4 border-green-500">
+                          <div className="font-semibold text-sm">User-Driven Events</div>
+                          <div className="text-xs text-muted-foreground">click, change, submit, focus, hover, keypress - triggered by user interaction</div>
+                        </div>
+                      </div>
+
+                      {/* Runtime Driven Events */}
+                      <div className="flex items-center gap-4 ml-12">
+                        <div className="w-8 h-8 rounded-full bg-teal-500 text-white flex items-center justify-center font-bold text-sm flex-shrink-0">
+                          9
+                        </div>
+                        <div className="flex-1 bg-white dark:bg-gray-900 rounded-lg p-3 border-l-4 border-teal-500">
+                          <div className="font-semibold text-sm">Runtime-Driven Events</div>
+                          <div className="text-xs text-muted-foreground">enterViewport, timeOnPage, media events - triggered by browser/system conditions</div>
+                        </div>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              </TabsContent>
+
+              <TabsContent value="rules" className="space-y-4">
+                {/* Rules by Event */}
+                <Card id="event-timeline" className="bg-gradient-to-br from-blue-50 to-purple-50 dark:from-blue-950 dark:to-purple-950 border-2">
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                      <span>Rules by Event</span>
+                      <span className="text-sm font-normal text-muted-foreground">Click a rule to jump to its details</span>
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
                         {/* Horizontal scrollable list of events with their rules */}
                         <div className="space-y-4">
                           {/* Page Load Events (1-5) */}
@@ -1538,10 +1619,41 @@ export default function Home() {
                             </div>
                           </div>
                         </div>
-                      </TabsContent>
-                    </Tabs>
                   </CardContent>
                 </Card>
+
+                {eventTypes.length > 0 && (
+                  <div className="flex items-center gap-4">
+                    <label className="text-sm font-medium whitespace-nowrap">Filter by Event Type:</label>
+                    <Select value={selectedEventType} onValueChange={setSelectedEventType}>
+                      <SelectTrigger className="w-[280px]">
+                        <SelectValue placeholder="All Event Types" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All Event Types ({data?.rules?.length || 0})</SelectItem>
+                        {eventTypes.map((eventType) => {
+                          const ruleCount = data?.rules?.filter(rule =>
+                            rule.events?.some((event: any) => getEventTypeFromPath(event.modulePath) === eventType)
+                          ).length || 0
+                          return (
+                            <SelectItem key={eventType} value={eventType}>
+                              {formatEventType(eventType)} ({ruleCount})
+                            </SelectItem>
+                          )
+                        })}
+                      </SelectContent>
+                    </Select>
+                    {selectedEventType !== 'all' && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setSelectedEventType('all')}
+                      >
+                        Clear Filter
+                      </Button>
+                    )}
+                  </div>
+                )}
 
                 {filteredRules && filteredRules.length > 0 ? (
                   <Accordion type="single" collapsible className="w-full">
