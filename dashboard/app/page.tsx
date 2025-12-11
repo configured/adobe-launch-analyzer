@@ -37,6 +37,9 @@ interface ScriptAnalysis {
     gzippedSize?: number
     error?: string
     showOriginal?: boolean
+    hasPathBasedConfig?: boolean
+    triggeredByEvent?: string
+    triggeredByRule?: string
   }
 }
 
@@ -73,6 +76,81 @@ function formatEventType(eventType: string): string {
     .trim()
 }
 
+// Helper function to check if a rule has pathAndQuerystring conditions
+function hasPathAndQuerystringCondition(rule: any): { hasCondition: boolean; paths: string[] } {
+  if (!rule.conditions || !Array.isArray(rule.conditions)) {
+    return { hasCondition: false, paths: [] }
+  }
+
+  const paths: string[] = []
+
+  for (const condition of rule.conditions) {
+    // Check if the modulePath indicates a path condition
+    if (condition.modulePath?.includes('pathAndQuerystring') ||
+        condition.modulePath?.includes('path') ||
+        condition.modulePath?.includes('conditions/path')) {
+
+      if (condition.settings) {
+        // Extract path patterns from settings
+        if (condition.settings.paths && Array.isArray(condition.settings.paths)) {
+          for (const pathObj of condition.settings.paths) {
+            if (pathObj.value) {
+              paths.push(pathObj.value)
+            }
+          }
+        }
+        if (condition.settings.path) {
+          paths.push(condition.settings.path)
+        }
+        if (condition.settings.value) {
+          paths.push(condition.settings.value)
+        }
+        // Check for regex patterns
+        if (condition.settings.valueIsRegex && condition.settings.value) {
+          paths.push(`(regex) ${condition.settings.value}`)
+        }
+      }
+
+      return { hasCondition: true, paths }
+    }
+  }
+
+  return { hasCondition: false, paths: [] }
+}
+
+// Helper function to collect all external script URLs from rules
+function collectAllScriptUrls(rules: any[]): { url: string; ruleName: string; eventType: string }[] {
+  const scripts: { url: string; ruleName: string; eventType: string }[] = []
+
+  for (const rule of rules) {
+    // Get event type for this rule
+    const eventTypes: string[] = []
+    if (rule.events) {
+      for (const event of rule.events) {
+        if (event.modulePath) {
+          eventTypes.push(getEventTypeFromPath(event.modulePath))
+        }
+      }
+    }
+    const eventType = eventTypes.length > 0 ? eventTypes.join(', ') : 'unknown'
+
+    // Check actions for external scripts
+    if (rule.actions) {
+      for (const action of rule.actions) {
+        if (action.settings?.source && typeof action.settings.source === 'string' && action.settings.source.startsWith('http')) {
+          scripts.push({
+            url: action.settings.source,
+            ruleName: rule.name || rule.id,
+            eventType
+          })
+        }
+      }
+    }
+  }
+
+  return scripts
+}
+
 const RECENT_URLS_KEY = 'adobe-launch-recent-urls'
 const MAX_RECENT_URLS = 10
 
@@ -91,6 +169,9 @@ export default function Home() {
   const [scriptAnalyses, setScriptAnalyses] = useState<ScriptAnalysis>({})
   const [selectedEventType, setSelectedEventType] = useState<string>('all')
   const [recentUrls, setRecentUrls] = useState<RecentUrl[]>([])
+  const [bulkAnalyzing, setBulkAnalyzing] = useState(false)
+  const [bulkAnalysisProgress, setBulkAnalysisProgress] = useState({ current: 0, total: 0 })
+  const [exporting, setExporting] = useState(false)
 
   // Load recent URLs from localStorage on mount
   useEffect(() => {
@@ -195,11 +276,11 @@ export default function Home() {
     }
   }
 
-  const analyzeScript = async (scriptUrl: string) => {
+  const analyzeScript = async (scriptUrl: string, triggeredByEvent?: string, triggeredByRule?: string) => {
     // Set loading state
     setScriptAnalyses(prev => ({
       ...prev,
-      [scriptUrl]: { loading: true }
+      [scriptUrl]: { loading: true, triggeredByEvent, triggeredByRule }
     }))
 
     try {
@@ -208,7 +289,7 @@ export default function Home() {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ url: scriptUrl }),
+        body: JSON.stringify({ url: scriptUrl, triggeredByEvent, triggeredByRule }),
       })
 
       const result = await response.json()
@@ -218,7 +299,9 @@ export default function Home() {
           ...prev,
           [scriptUrl]: {
             loading: false,
-            error: result.error || 'Failed to analyze script'
+            error: result.error || 'Failed to analyze script',
+            triggeredByEvent,
+            triggeredByRule
           }
         }))
         return
@@ -233,7 +316,10 @@ export default function Home() {
           originalContent: result.originalContent,
           scriptLength: result.scriptLength,
           gzippedSize: result.gzippedSize,
-          showOriginal: false
+          hasPathBasedConfig: result.hasPathBasedConfig,
+          showOriginal: false,
+          triggeredByEvent,
+          triggeredByRule
         }
       }))
     } catch (error: any) {
@@ -242,9 +328,81 @@ export default function Home() {
         ...prev,
         [scriptUrl]: {
           loading: false,
-          error: error.message || 'Failed to analyze script'
+          error: error.message || 'Failed to analyze script',
+          triggeredByEvent,
+          triggeredByRule
         }
       }))
+    }
+  }
+
+  // Analyze all external scripts
+  const analyzeAllScripts = async () => {
+    if (!data?.rules) return
+
+    const scripts = collectAllScriptUrls(data.rules)
+    // Filter out already analyzed scripts
+    const toAnalyze = scripts.filter(s => !scriptAnalyses[s.url] || scriptAnalyses[s.url].error)
+
+    if (toAnalyze.length === 0) {
+      return
+    }
+
+    setBulkAnalyzing(true)
+    setBulkAnalysisProgress({ current: 0, total: toAnalyze.length })
+
+    for (let i = 0; i < toAnalyze.length; i++) {
+      const script = toAnalyze[i]
+      setBulkAnalysisProgress({ current: i + 1, total: toAnalyze.length })
+      await analyzeScript(script.url, script.eventType, script.ruleName)
+      // Small delay between requests to avoid rate limiting
+      if (i < toAnalyze.length - 1) {
+        await new Promise(resolve => setTimeout(resolve, 500))
+      }
+    }
+
+    setBulkAnalyzing(false)
+    setBulkAnalysisProgress({ current: 0, total: 0 })
+  }
+
+  // Get total external scripts count
+  const externalScriptsCount = useMemo(() => {
+    if (!data?.rules) return 0
+    return collectAllScriptUrls(data.rules).length
+  }, [data?.rules])
+
+  // Get analyzed scripts count
+  const analyzedScriptsCount = useMemo(() => {
+    if (!data?.rules) return 0
+    const scripts = collectAllScriptUrls(data.rules)
+    return scripts.filter(s => scriptAnalyses[s.url] && !scriptAnalyses[s.url].loading && !scriptAnalyses[s.url].error).length
+  }, [data?.rules, scriptAnalyses])
+
+  // Export analyses to Excel
+  const exportToExcel = async () => {
+    setExporting(true)
+    try {
+      const response = await fetch('/api/export-analyses')
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.error || 'Failed to export')
+      }
+
+      // Download the file
+      const blob = await response.blob()
+      const url = window.URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `adobe-launch-analyses-${new Date().toISOString().split('T')[0]}.xlsx`
+      document.body.appendChild(a)
+      a.click()
+      window.URL.revokeObjectURL(url)
+      document.body.removeChild(a)
+    } catch (error: any) {
+      console.error('Export failed:', error)
+      alert(`Export failed: ${error.message}`)
+    } finally {
+      setExporting(false)
     }
   }
 
@@ -533,7 +691,7 @@ export default function Home() {
   }
 
   // Render module (event, condition, action) with detailed information
-  const renderModule = (module: any, index: number, type: 'event' | 'condition' | 'action') => {
+  const renderModule = (module: any, index: number, type: 'event' | 'condition' | 'action', ruleContext?: { ruleName: string; eventType: string }) => {
     const moduleName = getModuleName(module.modulePath)
     const complexity = calculateComplexity(module.settings)
 
@@ -609,7 +767,7 @@ export default function Home() {
                                   <Button
                                     size="sm"
                                     variant="outline"
-                                    onClick={() => analyzeScript(scriptUrl)}
+                                    onClick={() => analyzeScript(scriptUrl, ruleContext?.eventType, ruleContext?.ruleName)}
                                     disabled={analysis?.loading}
                                   >
                                     {analysis?.loading ? 'Analyzing...' : 'Analyze Script'}
@@ -624,6 +782,24 @@ export default function Home() {
                                       </div>
                                     ) : (
                                       <>
+                                        {/* Trigger Info */}
+                                        {(analysis.triggeredByEvent || analysis.triggeredByRule) && (
+                                          <div className="p-3 bg-blue-50 dark:bg-blue-950 rounded-md border border-blue-200 dark:border-blue-800">
+                                            <div className="text-sm font-semibold text-blue-800 dark:text-blue-200 mb-1">Triggered By:</div>
+                                            <div className="flex flex-wrap gap-2 text-xs">
+                                              {analysis.triggeredByEvent && (
+                                                <span className="inline-flex items-center rounded-md bg-blue-100 dark:bg-blue-900 px-2 py-1 font-medium text-blue-700 dark:text-blue-300">
+                                                  Event: {formatEventType(analysis.triggeredByEvent)}
+                                                </span>
+                                              )}
+                                              {analysis.triggeredByRule && (
+                                                <span className="inline-flex items-center rounded-md bg-blue-100 dark:bg-blue-900 px-2 py-1 font-medium text-blue-700 dark:text-blue-300">
+                                                  Rule: {analysis.triggeredByRule}
+                                                </span>
+                                              )}
+                                            </div>
+                                          </div>
+                                        )}
                                         <div className="p-4 bg-muted rounded-md">
                                           <div className="text-sm font-semibold mb-3">AI Analysis:</div>
                                           <div className="prose prose-sm dark:prose-invert max-w-none">
@@ -818,6 +994,7 @@ export default function Home() {
                         }}
                       />
                       <Button
+                        type="button"
                         onClick={handleUrlExtract}
                         disabled={loading || !url.trim()}
                       >
@@ -985,6 +1162,53 @@ export default function Home() {
                       Extracted: {new Date(data.metadata.extractedAt).toLocaleString()}
                     </div>
                   </div>
+
+                  {/* External Scripts Analysis Section */}
+                  {externalScriptsCount > 0 && (
+                    <div className="border-t pt-4 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <div className="text-sm font-medium">External Custom Scripts</div>
+                          <div className="text-xs text-muted-foreground">
+                            {analyzedScriptsCount} of {externalScriptsCount} scripts analyzed
+                          </div>
+                        </div>
+                        <div className="flex gap-2">
+                          <Button
+                            onClick={analyzeAllScripts}
+                            disabled={bulkAnalyzing || analyzedScriptsCount === externalScriptsCount}
+                            size="sm"
+                          >
+                            {bulkAnalyzing ? (
+                              <>
+                                Analyzing {bulkAnalysisProgress.current}/{bulkAnalysisProgress.total}...
+                              </>
+                            ) : analyzedScriptsCount === externalScriptsCount ? (
+                              'All Scripts Analyzed'
+                            ) : (
+                              `Analyze All Scripts (${externalScriptsCount - analyzedScriptsCount})`
+                            )}
+                          </Button>
+                          <Button
+                            onClick={exportToExcel}
+                            disabled={exporting || analyzedScriptsCount === 0}
+                            size="sm"
+                            variant="outline"
+                          >
+                            {exporting ? 'Exporting...' : 'Export to Excel'}
+                          </Button>
+                        </div>
+                      </div>
+                      {bulkAnalyzing && (
+                        <div className="w-full bg-muted rounded-full h-2">
+                          <div
+                            className="bg-primary h-2 rounded-full transition-all duration-300"
+                            style={{ width: `${(bulkAnalysisProgress.current / bulkAnalysisProgress.total) * 100}%` }}
+                          />
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </CardContent>
               </Card>
             )}
@@ -1666,6 +1890,9 @@ export default function Home() {
                         }
                       })
 
+                      // Check for pathAndQuerystring conditions
+                      const pathCondition = hasPathAndQuerystringCondition(rule)
+
                       // Calculate total rule complexity
                       const totalComplexity =
                         (rule.events?.reduce((sum: number, e: any) => sum + calculateComplexity(e.settings), 0) || 0) +
@@ -1698,6 +1925,14 @@ export default function Home() {
                                       ))}
                                     </div>
                                   )}
+                                  {pathCondition.hasCondition && (
+                                    <span
+                                      className="inline-flex items-center rounded-md bg-amber-100 dark:bg-amber-900 px-2 py-1 text-xs font-medium text-amber-800 dark:text-amber-200 ring-1 ring-inset ring-amber-600/20"
+                                      title={pathCondition.paths.length > 0 ? `Paths: ${pathCondition.paths.join(', ')}` : 'Has path conditions'}
+                                    >
+                                      Path Conditional
+                                    </span>
+                                  )}
                                 </div>
                                 <div className="flex items-center gap-3 text-xs text-muted-foreground">
                                   <span>{rule.events?.length || 0} events</span>
@@ -1706,6 +1941,15 @@ export default function Home() {
                                   <span>•</span>
                                   <span>{rule.actions?.length || 0} actions</span>
                                 </div>
+                                {pathCondition.hasCondition && pathCondition.paths.length > 0 && (
+                                  <div className="flex items-center gap-2 text-xs">
+                                    <span className="text-muted-foreground">Path patterns:</span>
+                                    <span className="font-mono text-amber-700 dark:text-amber-300">
+                                      {pathCondition.paths.slice(0, 3).join(', ')}
+                                      {pathCondition.paths.length > 3 && ` +${pathCondition.paths.length - 3} more`}
+                                    </span>
+                                  </div>
+                                )}
                               </div>
                               <div className="flex flex-col items-end gap-1 min-w-[80px]">
                                 <div className="text-xs text-muted-foreground">Total Cost</div>
@@ -1742,7 +1986,7 @@ export default function Home() {
                                   </span>
                                 </h4>
                                 {rule.events && rule.events.length > 0 ? (
-                                  rule.events.map((event: any, idx: number) => renderModule(event, idx, 'event'))
+                                  rule.events.map((event: any, idx: number) => renderModule(event, idx, 'event', { ruleName: rule.name, eventType: Array.from(ruleEventTypes).join(', ') }))
                                 ) : (
                                   <div className="text-sm text-muted-foreground italic">No events</div>
                                 )}
@@ -1757,7 +2001,7 @@ export default function Home() {
                                   </span>
                                 </h4>
                                 {rule.conditions && rule.conditions.length > 0 ? (
-                                  rule.conditions.map((condition: any, idx: number) => renderModule(condition, idx, 'condition'))
+                                  rule.conditions.map((condition: any, idx: number) => renderModule(condition, idx, 'condition', { ruleName: rule.name, eventType: Array.from(ruleEventTypes).join(', ') }))
                                 ) : (
                                   <div className="text-sm text-muted-foreground italic">No conditions</div>
                                 )}
@@ -1773,7 +2017,7 @@ export default function Home() {
                                 </span>
                               </h4>
                               {rule.actions && rule.actions.length > 0 ? (
-                                rule.actions.map((action: any, idx: number) => renderModule(action, idx, 'action'))
+                                rule.actions.map((action: any, idx: number) => renderModule(action, idx, 'action', { ruleName: rule.name, eventType: Array.from(ruleEventTypes).join(', ') }))
                               ) : (
                                 <div className="text-sm text-muted-foreground italic">No actions</div>
                               )}

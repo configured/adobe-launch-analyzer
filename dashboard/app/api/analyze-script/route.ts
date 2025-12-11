@@ -8,13 +8,15 @@ import { getCachedAnalysis, saveAnalysis, generateScriptHash } from '@/lib/model
 
 const gzipAsync = promisify(gzip)
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-})
+function getOpenAIClient() {
+  return new OpenAI({
+    apiKey: process.env.OPENAI_API_KEY,
+  })
+}
 
 export async function POST(request: NextRequest) {
   try {
-    const { url } = await request.json()
+    const { url, triggeredByEvent, triggeredByRule } = await request.json()
 
     if (!url) {
       return NextResponse.json(
@@ -96,6 +98,10 @@ export async function POST(request: NextRequest) {
             analysis: cached.analysis,
             externalServices: cached.externalServices || [],
             loadsScripts: cached.loadsScripts || false,
+            hasPathBasedConfig: cached.hasPathBasedConfig || false,
+            pathConfigDetails: cached.pathConfigDetails || '',
+            adobeAnalytics: cached.adobeAnalytics || null,
+            eddlDataLayer: cached.eddlDataLayer || null,
             truncated: cached.truncated,
             cached: true
           })
@@ -203,7 +209,7 @@ export async function POST(request: NextRequest) {
     console.log('Sending to OpenAI for analysis...')
 
     // Analyze with OpenAI using structured output
-    const completion = await openai.chat.completions.create({
+    const completion = await getOpenAIClient().chat.completions.create({
       model: 'gpt-4o-mini',
       messages: [
         {
@@ -217,10 +223,33 @@ export async function POST(request: NextRequest) {
   "dataCollection": "What data is being collected or sent?",
   "externalServices": ["List", "of", "third-party", "services", "or", "APIs"],
   "loadsScripts": true/false (whether it dynamically loads other scripts via createElement, insertBefore, appendChild, etc.),
-  "privacyConsiderations": "Privacy-related actions (cookies, tracking, PII)"
+  "privacyConsiderations": "Privacy-related actions (cookies, tracking, PII)",
+  "hasPathBasedConfig": true/false (whether the script has logic to manage different configurations or behaviors based on URL paths, pathnames, or page types),
+  "pathConfigDetails": "Description of path-based configuration logic if found (e.g., 'Loads different tracking IDs for /checkout vs /homepage', 'Applies different rules based on window.location.pathname'). Empty string if none.",
+  "adobeAnalytics": {
+    "hasAdobeAnalytics": true/false (whether script interacts with Adobe Analytics),
+    "variableModifications": ["List of s.* or _satellite variable modifications like 's.pageName', 's.eVar1', 's.prop1', 's.events', etc."],
+    "trackingCalls": ["List of tracking calls like 's.t()', 's.tl()', 's.clearVars()', '_satellite.track()', etc."],
+    "customLinks": ["Any custom link tracking identified"],
+    "eventsSet": ["List of events being set like 'event1', 'purchase', 'prodView', etc."],
+    "eVarsSet": ["List of eVars being set like 'eVar1', 'eVar2', etc."],
+    "propsSet": ["List of props being set like 'prop1', 'prop2', etc."],
+    "productsString": "Description of products string manipulation if found, empty string if none",
+    "details": "Additional details about Adobe Analytics implementation"
+  },
+  "eddlDataLayer": {
+    "hasEddlProcessing": true/false (whether script reads from or writes to eddlDataLayer, digitalData, dataLayer, or similar data layer objects),
+    "operations": ["List of operations like 'read', 'write', 'push', 'event listener', etc."],
+    "dataLayerVariables": ["List of data layer paths accessed like 'eddlDataLayer.page.pageInfo', 'digitalData.user', 'dataLayer.push()', etc."],
+    "eventListeners": ["Any adobeDataLayer.push or addEventListener patterns for data layer events"],
+    "details": "Description of how the script interacts with the data layer"
+  }
 }
 
-Be thorough in identifying external services - look for domain names, API endpoints, CDN URLs, and third-party service names.`
+Be thorough in identifying external services - look for domain names, API endpoints, CDN URLs, and third-party service names.
+For path-based configuration, look for patterns like: pathname checks, URL path conditionals, page type detection, route-based logic, location.pathname usage, regex path matching, or path-to-config mappings.
+For Adobe Analytics, look for: s.pageName, s.channel, s.eVar*, s.prop*, s.events, s.products, s.t(), s.tl(), s.clearVars(), _satellite.getVar(), _satellite.setVar(), and any AppMeasurement patterns.
+For EDDL/Data Layer, look for: eddlDataLayer, digitalData, dataLayer, adobeDataLayer, window.digitalData, window.dataLayer, .push() calls on data layers, getState(), addEventListener for data layer events, and any XDM object manipulation.`
         },
         {
           role: 'user',
@@ -229,18 +258,26 @@ Be thorough in identifying external services - look for domain names, API endpoi
       ],
       response_format: { type: "json_object" },
       temperature: 0.3,
-      max_tokens: 1500
+      max_tokens: 2500
     })
 
     const responseText = completion.choices[0]?.message?.content || '{}'
     let parsedAnalysis: any
     let externalServices: string[] = []
     let loadsScripts = false
+    let hasPathBasedConfig = false
+    let pathConfigDetails = ''
+    let adobeAnalytics: any = null
+    let eddlDataLayer: any = null
 
     try {
       parsedAnalysis = JSON.parse(responseText)
       externalServices = parsedAnalysis.externalServices || []
       loadsScripts = parsedAnalysis.loadsScripts || false
+      hasPathBasedConfig = parsedAnalysis.hasPathBasedConfig || false
+      pathConfigDetails = parsedAnalysis.pathConfigDetails || ''
+      adobeAnalytics = parsedAnalysis.adobeAnalytics || null
+      eddlDataLayer = parsedAnalysis.eddlDataLayer || null
     } catch (parseError) {
       console.error('Failed to parse OpenAI JSON response:', parseError)
       parsedAnalysis = { summary: responseText }
@@ -261,6 +298,111 @@ Be thorough in identifying external services - look for domain names, API endpoi
       console.log('Script loading detected in code analysis')
       loadsScripts = true
     }
+
+    // Also check script content directly for path-based config patterns
+    const pathConfigPatterns = [
+      /location\.pathname/i,
+      /window\.location\.pathname/i,
+      /\.pathname\s*[=!]==?\s*['"]/i,
+      /pathname\.match\s*\(/i,
+      /pathname\.indexOf\s*\(/i,
+      /pathname\.includes\s*\(/i,
+      /pathname\.startsWith\s*\(/i,
+      /\/checkout|\/cart|\/product|\/home/i
+    ]
+
+    const hasPathConfigCode = pathConfigPatterns.some(pattern => pattern.test(extractedCode))
+    if (hasPathConfigCode && !hasPathBasedConfig) {
+      console.log('Path-based configuration detected in code analysis')
+      hasPathBasedConfig = true
+    }
+
+    // Also check script content directly for Adobe Analytics patterns
+    const adobeAnalyticsPatterns = [
+      /\bs\.(pageName|channel|server|pageType)\s*=/i,
+      /\bs\.(eVar\d+|prop\d+|events)\s*=/i,
+      /\bs\.(t|tl|clearVars)\s*\(/i,
+      /\bs\.products\s*=/i,
+      /_satellite\.(track|getVar|setVar)\s*\(/i,
+      /AppMeasurement/i
+    ]
+
+    const hasAdobeAnalyticsCode = adobeAnalyticsPatterns.some(pattern => pattern.test(extractedCode))
+    if (hasAdobeAnalyticsCode && (!adobeAnalytics || !adobeAnalytics.hasAdobeAnalytics)) {
+      console.log('Adobe Analytics patterns detected in code analysis')
+      if (!adobeAnalytics) {
+        adobeAnalytics = { hasAdobeAnalytics: true }
+      } else {
+        adobeAnalytics.hasAdobeAnalytics = true
+      }
+    }
+
+    // Also check script content directly for EDDL/Data Layer patterns
+    const eddlDataLayerPatterns = [
+      /eddlDataLayer/i,
+      /digitalData\s*[.\[]/i,
+      /window\.digitalData/i,
+      /dataLayer\s*\.\s*push\s*\(/i,
+      /adobeDataLayer/i,
+      /window\.adobeDataLayer/i,
+      /\.getState\s*\(/i,
+      /addEventListener\s*\(\s*['"]adobeDataLayer/i,
+      /xdm\s*[.:]/i,
+      /window\.xdm/i
+    ]
+
+    const hasEddlCode = eddlDataLayerPatterns.some(pattern => pattern.test(extractedCode))
+    if (hasEddlCode && (!eddlDataLayer || !eddlDataLayer.hasEddlProcessing)) {
+      console.log('EDDL/Data Layer patterns detected in code analysis')
+      if (!eddlDataLayer) {
+        eddlDataLayer = { hasEddlProcessing: true }
+      } else {
+        eddlDataLayer.hasEddlProcessing = true
+      }
+    }
+
+    // Format Adobe Analytics section
+    const adobeAnalyticsSection = adobeAnalytics?.hasAdobeAnalytics ? `## Adobe Analytics Integration
+✓ This script interacts with Adobe Analytics
+
+${adobeAnalytics.variableModifications?.length > 0 ? `### Variable Modifications
+${adobeAnalytics.variableModifications.map((v: string) => `- ${v}`).join('\n')}` : ''}
+
+${adobeAnalytics.trackingCalls?.length > 0 ? `### Tracking Calls
+${adobeAnalytics.trackingCalls.map((t: string) => `- ${t}`).join('\n')}` : ''}
+
+${adobeAnalytics.eventsSet?.length > 0 ? `### Events Set
+${adobeAnalytics.eventsSet.map((e: string) => `- ${e}`).join('\n')}` : ''}
+
+${adobeAnalytics.eVarsSet?.length > 0 ? `### eVars Set
+${adobeAnalytics.eVarsSet.map((e: string) => `- ${e}`).join('\n')}` : ''}
+
+${adobeAnalytics.propsSet?.length > 0 ? `### Props Set
+${adobeAnalytics.propsSet.map((p: string) => `- ${p}`).join('\n')}` : ''}
+
+${adobeAnalytics.productsString ? `### Products String
+${adobeAnalytics.productsString}` : ''}
+
+${adobeAnalytics.details ? `### Additional Details
+${adobeAnalytics.details}` : ''}` : `## Adobe Analytics Integration
+✗ No Adobe Analytics interactions detected`
+
+    // Format EDDL/Data Layer section
+    const eddlDataLayerSection = eddlDataLayer?.hasEddlProcessing ? `## EDDL/Data Layer Processing
+✓ This script interacts with the Experience Data Layer
+
+${eddlDataLayer.operations?.length > 0 ? `### Operations
+${eddlDataLayer.operations.map((o: string) => `- ${o}`).join('\n')}` : ''}
+
+${eddlDataLayer.dataLayerVariables?.length > 0 ? `### Data Layer Variables Accessed
+${eddlDataLayer.dataLayerVariables.map((v: string) => `- ${v}`).join('\n')}` : ''}
+
+${eddlDataLayer.eventListeners?.length > 0 ? `### Event Listeners
+${eddlDataLayer.eventListeners.map((e: string) => `- ${e}`).join('\n')}` : ''}
+
+${eddlDataLayer.details ? `### Details
+${eddlDataLayer.details}` : ''}` : `## EDDL/Data Layer Processing
+✗ No Data Layer interactions detected`
 
     // Format the analysis as markdown for display
     const analysis = `## Summary
@@ -285,12 +427,22 @@ ${externalServices.length > 0
 ## Dynamically Loads Scripts
 ${loadsScripts ? '✓ Yes - This script dynamically loads other scripts' : '✗ No - Does not load external scripts'}
 
+## Path-Based Configuration
+${hasPathBasedConfig ? `✓ Yes - This script manages configuration per path/page type${pathConfigDetails ? `\n${pathConfigDetails}` : ''}` : '✗ No - Does not have path-specific logic'}
+
+${adobeAnalyticsSection}
+
+${eddlDataLayerSection}
+
 ## Privacy Considerations
 ${parsedAnalysis.privacyConsiderations || 'No specific privacy concerns identified'}`
 
     console.log('Analysis complete:', {
       externalServices: externalServices.length,
-      loadsScripts
+      loadsScripts,
+      hasPathBasedConfig,
+      hasAdobeAnalytics: adobeAnalytics?.hasAdobeAnalytics || false,
+      hasEddlProcessing: eddlDataLayer?.hasEddlProcessing || false
     })
 
     // Calculate gzipped size
@@ -314,9 +466,15 @@ ${parsedAnalysis.privacyConsiderations || 'No specific privacy concerns identifi
           analysis,
           externalServices,
           loadsScripts,
+          hasPathBasedConfig,
+          pathConfigDetails,
+          adobeAnalytics,
+          eddlDataLayer,
           scriptContent: beautifiedScript,
           originalContent: scriptContent,
-          truncated: scriptContent.length > maxLength
+          truncated: scriptContent.length > maxLength,
+          triggeredByEvent,
+          triggeredByRule
         })
         console.log('Analysis saved to MongoDB cache')
       } catch (saveError) {
@@ -335,6 +493,10 @@ ${parsedAnalysis.privacyConsiderations || 'No specific privacy concerns identifi
       analysis,
       externalServices, // List of external services detected
       loadsScripts, // Whether it loads scripts dynamically
+      hasPathBasedConfig, // Whether it has path-based configuration logic
+      pathConfigDetails, // Details about path-based configuration
+      adobeAnalytics, // Adobe Analytics specific analysis
+      eddlDataLayer, // EDDL/Data Layer specific analysis
       truncated: scriptContent.length > maxLength,
       cached: false
     })

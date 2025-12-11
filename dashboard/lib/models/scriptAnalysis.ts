@@ -1,6 +1,26 @@
 import { getCollection } from '../mongodb'
 import crypto from 'crypto'
 
+export interface AdobeAnalyticsInfo {
+  hasAdobeAnalytics: boolean
+  variableModifications?: string[]
+  trackingCalls?: string[]
+  customLinks?: string[]
+  eventsSet?: string[]
+  eVarsSet?: string[]
+  propsSet?: string[]
+  productsString?: string
+  details?: string
+}
+
+export interface EddlDataLayerInfo {
+  hasEddlProcessing: boolean
+  operations?: string[]
+  dataLayerVariables?: string[]
+  eventListeners?: string[]
+  details?: string
+}
+
 export interface ScriptAnalysisDocument {
   _id?: string
   scriptUrl: string
@@ -10,9 +30,15 @@ export interface ScriptAnalysisDocument {
   analysis: string
   externalServices: string[] // List of external services/APIs detected
   loadsScripts: boolean // Whether the script dynamically loads other scripts
+  hasPathBasedConfig: boolean // Whether script has path-based configuration logic
+  pathConfigDetails?: string // Details about path-based configuration
+  adobeAnalytics: AdobeAnalyticsInfo | null // Adobe Analytics specific analysis
+  eddlDataLayer: EddlDataLayerInfo | null // EDDL/Data Layer specific analysis
   scriptContent: string // Beautified version
   originalContent: string // Original minified version
   truncated: boolean
+  triggeredByEvent?: string // Event type that triggers this script
+  triggeredByRule?: string // Rule name that contains this script
   createdAt: Date
   updatedAt: Date
 }
@@ -123,5 +149,46 @@ export async function getAnalysisStats(): Promise<{
       totalAnalyses: 0,
       uniqueScripts: 0
     }
+  }
+}
+
+// Get all analyses for export
+export async function getAllAnalyses(): Promise<ScriptAnalysisDocument[]> {
+  try {
+    const collection = await getCollection(COLLECTION_NAME)
+    if (!collection) {
+      return []
+    }
+    const analyses = await collection.find({}).sort({ createdAt: -1 }).toArray()
+    return analyses as unknown as ScriptAnalysisDocument[]
+  } catch (error) {
+    console.error('Error getting all analyses:', error)
+    return []
+  }
+}
+
+// Update analysis with trigger info
+export async function updateAnalysisTriggerInfo(
+  scriptUrl: string,
+  triggeredByEvent?: string,
+  triggeredByRule?: string
+): Promise<void> {
+  try {
+    const collection = await getCollection(COLLECTION_NAME)
+    if (!collection) {
+      return
+    }
+    await collection.updateMany(
+      { scriptUrl },
+      {
+        $set: {
+          triggeredByEvent,
+          triggeredByRule,
+          updatedAt: new Date()
+        }
+      }
+    )
+  } catch (error) {
+    console.error('Error updating trigger info:', error)
   }
 }

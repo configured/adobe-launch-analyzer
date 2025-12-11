@@ -77,7 +77,7 @@ function extractBalancedBraces(str: string, startIndex: number): string | null {
 
 function extractViaSandbox(scriptContent: string): any {
   try {
-    const sandbox = {
+    const sandbox: Record<string, any> = {
       window: { _satellite: {} },
       _satellite: {},
       console: { log: () => {}, warn: () => {}, error: () => {} },
