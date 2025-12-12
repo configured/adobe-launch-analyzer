@@ -183,13 +183,21 @@ export async function GET(request: NextRequest) {
       })
     })
 
-    // External Services Sheet
+    // External Services Sheet (with detailed info)
     const servicesSheet = workbook.addWorksheet('External Services')
 
     servicesSheet.columns = [
-      { header: 'Script URL', key: 'scriptUrl', width: 60 },
-      { header: 'Triggered By Rule', key: 'triggeredByRule', width: 30 },
-      { header: 'External Service', key: 'service', width: 50 },
+      { header: 'Script URL', key: 'scriptUrl', width: 50 },
+      { header: 'Triggered By Rule', key: 'triggeredByRule', width: 25 },
+      { header: 'Service Name', key: 'serviceName', width: 20 },
+      { header: 'Official Name', key: 'officialName', width: 25 },
+      { header: 'Category', key: 'category', width: 18 },
+      { header: 'Vendor', key: 'vendor', width: 20 },
+      { header: 'Purpose', key: 'purpose', width: 30 },
+      { header: 'Description', key: 'description', width: 50 },
+      { header: 'Website', key: 'website', width: 35 },
+      { header: 'Documentation URL', key: 'documentationUrl', width: 45 },
+      { header: 'Privacy Policy URL', key: 'privacyPolicyUrl', width: 45 },
     ]
 
     // Style header row
@@ -201,14 +209,42 @@ export async function GET(request: NextRequest) {
     }
     servicesSheet.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } }
 
-    // Add external services data (one row per service)
+    // Add external services data (one row per service with details)
     analyses.forEach(analysis => {
-      if (analysis.externalServices && analysis.externalServices.length > 0) {
+      const serviceDetails = analysis.externalServicesDetails || []
+
+      // If we have detailed info, use it
+      if (serviceDetails.length > 0) {
+        serviceDetails.forEach((service: any) => {
+          servicesSheet.addRow({
+            scriptUrl: analysis.scriptUrl,
+            triggeredByRule: analysis.triggeredByRule || '',
+            serviceName: service.name || '',
+            officialName: service.officialName || '',
+            category: service.category || '',
+            vendor: service.vendor || '',
+            purpose: service.purpose || '',
+            description: service.description || '',
+            website: service.website || '',
+            documentationUrl: service.documentationUrl || '',
+            privacyPolicyUrl: service.privacyPolicyUrl || '',
+          })
+        })
+      } else if (analysis.externalServices && analysis.externalServices.length > 0) {
+        // Fallback to basic service names if no detailed info
         analysis.externalServices.forEach(service => {
           servicesSheet.addRow({
             scriptUrl: analysis.scriptUrl,
             triggeredByRule: analysis.triggeredByRule || '',
-            service,
+            serviceName: service,
+            officialName: '',
+            category: '',
+            vendor: '',
+            purpose: '',
+            description: '',
+            website: '',
+            documentationUrl: '',
+            privacyPolicyUrl: '',
           })
         })
       }

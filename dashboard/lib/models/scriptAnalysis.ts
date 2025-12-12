@@ -1,6 +1,16 @@
 import { getCollection } from '../mongodb'
 import crypto from 'crypto'
 
+export interface ExternalServiceInfo {
+  name: string
+  description: string
+  purpose: string
+  category: string // e.g., "Analytics", "Advertising", "Social Media", "Tag Management", etc.
+  website?: string
+  documentationUrl?: string
+  privacyPolicyUrl?: string
+}
+
 export interface AdobeAnalyticsInfo {
   hasAdobeAnalytics: boolean
   variableModifications?: string[]
@@ -38,6 +48,7 @@ export interface ScriptAnalysisDocument {
   analysis: string // Full markdown analysis for display
   analysisSections?: AnalysisSections // Individual sections for export
   externalServices: string[] // List of external services/APIs detected
+  externalServicesDetails?: ExternalServiceInfo[] // Detailed info about each service
   loadsScripts: boolean // Whether the script dynamically loads other scripts
   hasPathBasedConfig: boolean // Whether script has path-based configuration logic
   pathConfigDetails?: string // Details about path-based configuration

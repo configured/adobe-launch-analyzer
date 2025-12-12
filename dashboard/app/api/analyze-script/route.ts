@@ -97,6 +97,7 @@ export async function POST(request: NextRequest) {
             gzippedSize: cached.gzippedSize,
             analysis: cached.analysis,
             externalServices: cached.externalServices || [],
+            externalServicesDetails: cached.externalServicesDetails || [],
             loadsScripts: cached.loadsScripts || false,
             hasPathBasedConfig: cached.hasPathBasedConfig || false,
             pathConfigDetails: cached.pathConfigDetails || '',
@@ -455,6 +456,77 @@ ${parsedAnalysis.privacyConsiderations || 'No specific privacy concerns identifi
       console.error('Failed to calculate gzipped size:', gzipError)
     }
 
+    // Analyze external services with AI to get detailed information
+    let externalServicesDetails: any[] = []
+    if (externalServices.length > 0) {
+      try {
+        console.log('Analyzing external services:', externalServices)
+        const servicesCompletion = await getOpenAIClient().chat.completions.create({
+          model: 'gpt-4o-mini',
+          messages: [
+            {
+              role: 'system',
+              content: `You are an expert at identifying and describing marketing technology, analytics, and advertising services. For each service name provided, return detailed information in JSON format.
+
+Return a JSON object with this structure:
+{
+  "services": [
+    {
+      "name": "Original service name as provided",
+      "officialName": "Official/full name of the service",
+      "description": "Brief description of what this service does",
+      "purpose": "Primary purpose (e.g., 'Conversion tracking', 'Analytics', 'A/B Testing')",
+      "category": "Category (Analytics, Advertising, Social Media, Tag Management, Customer Data Platform, Personalization, Attribution, Consent Management, Session Recording, Heat Maps, Push Notifications, Chat, CRM, Email Marketing, Other)",
+      "vendor": "Company/vendor name",
+      "website": "Main website URL",
+      "documentationUrl": "Developer/implementation documentation URL if known",
+      "privacyPolicyUrl": "Privacy policy URL if known"
+    }
+  ]
+}
+
+Common services to recognize:
+- snaptr/Snap Pixel -> Snapchat advertising pixel
+- fbq/Facebook Pixel -> Meta/Facebook advertising
+- gtag/Google Analytics -> Google Analytics 4
+- _satellite -> Adobe Launch/DTM
+- ttq/TikTok Pixel -> TikTok advertising
+- pintrk -> Pinterest Tag
+- twq -> Twitter/X Pixel
+- li_fat_id/LinkedIn Insight -> LinkedIn advertising
+- amplitude -> Amplitude Analytics
+- segment -> Segment CDP
+- hotjar -> Hotjar session recording
+- clarity -> Microsoft Clarity
+- optimizely -> Optimizely experimentation
+- adobe-target -> Adobe Target personalization
+
+Be accurate with URLs. If you don't know a specific URL, omit that field rather than guessing.`
+            },
+            {
+              role: 'user',
+              content: `Analyze these external services/tracking technologies found in a script:\n\n${externalServices.join('\n')}`
+            }
+          ],
+          response_format: { type: "json_object" },
+          temperature: 0.3,
+          max_tokens: 2000
+        })
+
+        const servicesResponse = servicesCompletion.choices[0]?.message?.content || '{}'
+        try {
+          const parsed = JSON.parse(servicesResponse)
+          externalServicesDetails = parsed.services || []
+          console.log('External services analyzed:', externalServicesDetails.length)
+        } catch (e) {
+          console.error('Failed to parse external services response:', e)
+        }
+      } catch (serviceError) {
+        console.error('Failed to analyze external services:', serviceError)
+        // Continue without detailed service info
+      }
+    }
+
     // Build analysis sections object for structured storage
     const analysisSections = {
       summary: parsedAnalysis.summary || '',
@@ -475,6 +547,7 @@ ${parsedAnalysis.privacyConsiderations || 'No specific privacy concerns identifi
           analysis,
           analysisSections,
           externalServices,
+          externalServicesDetails,
           loadsScripts,
           hasPathBasedConfig,
           pathConfigDetails,
@@ -502,6 +575,7 @@ ${parsedAnalysis.privacyConsiderations || 'No specific privacy concerns identifi
       gzippedSize, // Include gzipped size
       analysis,
       externalServices, // List of external services detected
+      externalServicesDetails, // Detailed info about external services
       loadsScripts, // Whether it loads scripts dynamically
       hasPathBasedConfig, // Whether it has path-based configuration logic
       pathConfigDetails, // Details about path-based configuration
