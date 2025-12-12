@@ -21,20 +21,24 @@ export async function GET(request: NextRequest) {
     // Main Analysis Sheet
     const mainSheet = workbook.addWorksheet('Script Analyses')
 
-    // Define columns
+    // Define columns with separate analysis sections
     mainSheet.columns = [
       { header: 'Script URL', key: 'scriptUrl', width: 60 },
       { header: 'Triggered By Rule', key: 'triggeredByRule', width: 30 },
       { header: 'Triggered By Event', key: 'triggeredByEvent', width: 20 },
       { header: 'Script Size (bytes)', key: 'scriptLength', width: 15 },
       { header: 'Gzipped Size (bytes)', key: 'gzippedSize', width: 15 },
+      { header: 'Summary', key: 'summary', width: 50 },
+      { header: 'Purpose', key: 'purpose', width: 50 },
+      { header: 'Key Actions', key: 'keyActions', width: 50 },
+      { header: 'Data Collection', key: 'dataCollection', width: 50 },
+      { header: 'Privacy Considerations', key: 'privacyConsiderations', width: 50 },
       { header: 'Loads Scripts', key: 'loadsScripts', width: 12 },
       { header: 'Path-Based Config', key: 'hasPathBasedConfig', width: 15 },
       { header: 'Path Config Details', key: 'pathConfigDetails', width: 40 },
       { header: 'Has Adobe Analytics', key: 'hasAdobeAnalytics', width: 18 },
       { header: 'Has EDDL Processing', key: 'hasEddlProcessing', width: 18 },
       { header: 'External Services', key: 'externalServices', width: 40 },
-      { header: 'Analysis Summary', key: 'analysis', width: 80 },
       { header: 'Created At', key: 'createdAt', width: 20 },
     ]
 
@@ -49,19 +53,54 @@ export async function GET(request: NextRequest) {
 
     // Add data rows
     analyses.forEach(analysis => {
+      // Extract sections - use analysisSections if available, otherwise parse from analysis string
+      const sections = analysis.analysisSections || {}
+
+      // Fallback: parse from markdown if analysisSections not available
+      let summary = sections.summary || ''
+      let purpose = sections.purpose || ''
+      let keyActions = sections.keyActions || []
+      let dataCollection = sections.dataCollection || ''
+      let privacyConsiderations = sections.privacyConsiderations || ''
+
+      // If no structured sections, try to extract from markdown analysis
+      if (!summary && analysis.analysis) {
+        const summaryMatch = analysis.analysis.match(/## Summary\n([^#]*)/i)
+        if (summaryMatch) summary = summaryMatch[1].trim()
+
+        const purposeMatch = analysis.analysis.match(/## Purpose\n([^#]*)/i)
+        if (purposeMatch) purpose = purposeMatch[1].trim()
+
+        const keyActionsMatch = analysis.analysis.match(/## Key Actions\n([^#]*)/i)
+        if (keyActionsMatch) {
+          const actionsText = keyActionsMatch[1].trim()
+          keyActions = actionsText.split('\n').map(a => a.replace(/^-\s*/, '').trim()).filter(a => a)
+        }
+
+        const dataCollectionMatch = analysis.analysis.match(/## Data Collection\n([^#]*)/i)
+        if (dataCollectionMatch) dataCollection = dataCollectionMatch[1].trim()
+
+        const privacyMatch = analysis.analysis.match(/## Privacy Considerations\n([^#]*)/i)
+        if (privacyMatch) privacyConsiderations = privacyMatch[1].trim()
+      }
+
       mainSheet.addRow({
         scriptUrl: analysis.scriptUrl,
         triggeredByRule: analysis.triggeredByRule || '',
         triggeredByEvent: analysis.triggeredByEvent || '',
         scriptLength: analysis.scriptLength,
         gzippedSize: analysis.gzippedSize,
+        summary,
+        purpose,
+        keyActions: Array.isArray(keyActions) ? keyActions.join('; ') : keyActions,
+        dataCollection,
+        privacyConsiderations,
         loadsScripts: analysis.loadsScripts ? 'Yes' : 'No',
         hasPathBasedConfig: analysis.hasPathBasedConfig ? 'Yes' : 'No',
         pathConfigDetails: analysis.pathConfigDetails || '',
         hasAdobeAnalytics: analysis.adobeAnalytics?.hasAdobeAnalytics ? 'Yes' : 'No',
         hasEddlProcessing: analysis.eddlDataLayer?.hasEddlProcessing ? 'Yes' : 'No',
         externalServices: analysis.externalServices?.join(', ') || '',
-        analysis: analysis.analysis?.replace(/##/g, '').replace(/\n/g, ' ').substring(0, 500) || '',
         createdAt: analysis.createdAt ? new Date(analysis.createdAt).toLocaleString() : '',
       })
     })

@@ -21,13 +21,22 @@ export interface EddlDataLayerInfo {
   details?: string
 }
 
+export interface AnalysisSections {
+  summary?: string
+  purpose?: string
+  keyActions?: string[]
+  dataCollection?: string
+  privacyConsiderations?: string
+}
+
 export interface ScriptAnalysisDocument {
   _id?: string
   scriptUrl: string
   scriptHash: string // Hash of script content for cache invalidation
   scriptLength: number
   gzippedSize: number
-  analysis: string
+  analysis: string // Full markdown analysis for display
+  analysisSections?: AnalysisSections // Individual sections for export
   externalServices: string[] // List of external services/APIs detected
   loadsScripts: boolean // Whether the script dynamically loads other scripts
   hasPathBasedConfig: boolean // Whether script has path-based configuration logic

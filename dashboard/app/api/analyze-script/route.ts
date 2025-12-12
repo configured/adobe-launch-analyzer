@@ -455,6 +455,15 @@ ${parsedAnalysis.privacyConsiderations || 'No specific privacy concerns identifi
       console.error('Failed to calculate gzipped size:', gzipError)
     }
 
+    // Build analysis sections object for structured storage
+    const analysisSections = {
+      summary: parsedAnalysis.summary || '',
+      purpose: parsedAnalysis.purpose || '',
+      keyActions: Array.isArray(parsedAnalysis.keyActions) ? parsedAnalysis.keyActions : [],
+      dataCollection: parsedAnalysis.dataCollection || '',
+      privacyConsiderations: parsedAnalysis.privacyConsiderations || ''
+    }
+
     // Save to MongoDB cache (only if MongoDB is configured)
     if (process.env.MONGODB_URI) {
       try {
@@ -464,6 +473,7 @@ ${parsedAnalysis.privacyConsiderations || 'No specific privacy concerns identifi
           scriptLength: scriptContent.length,
           gzippedSize,
           analysis,
+          analysisSections,
           externalServices,
           loadsScripts,
           hasPathBasedConfig,
