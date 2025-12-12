@@ -27,6 +27,18 @@ interface AdobeData {
   buildInfo?: any
 }
 
+interface ExternalServiceInfo {
+  name: string
+  officialName?: string
+  description?: string
+  purpose?: string
+  category?: string
+  vendor?: string
+  website?: string
+  documentationUrl?: string
+  privacyPolicyUrl?: string
+}
+
 interface ScriptAnalysis {
   [url: string]: {
     loading: boolean
@@ -40,6 +52,8 @@ interface ScriptAnalysis {
     hasPathBasedConfig?: boolean
     triggeredByEvent?: string
     triggeredByRule?: string
+    externalServices?: string[]
+    externalServicesDetails?: ExternalServiceInfo[]
   }
 }
 
@@ -319,7 +333,9 @@ export default function Home() {
           hasPathBasedConfig: result.hasPathBasedConfig,
           showOriginal: false,
           triggeredByEvent,
-          triggeredByRule
+          triggeredByRule,
+          externalServices: result.externalServices,
+          externalServicesDetails: result.externalServicesDetails
         }
       }))
     } catch (error: any) {
@@ -377,6 +393,53 @@ export default function Home() {
     const scripts = collectAllScriptUrls(data.rules)
     return scripts.filter(s => scriptAnalyses[s.url] && !scriptAnalyses[s.url].loading && !scriptAnalyses[s.url].error).length
   }, [data?.rules, scriptAnalyses])
+
+  // Aggregate all external services from analyzed scripts
+  const allExternalServices = useMemo(() => {
+    const servicesMap = new Map<string, {
+      service: ExternalServiceInfo
+      scripts: { url: string; ruleName?: string }[]
+    }>()
+
+    Object.entries(scriptAnalyses).forEach(([scriptUrl, analysis]) => {
+      if (analysis.externalServicesDetails && analysis.externalServicesDetails.length > 0) {
+        analysis.externalServicesDetails.forEach(service => {
+          const key = service.name.toLowerCase()
+          if (servicesMap.has(key)) {
+            servicesMap.get(key)!.scripts.push({
+              url: scriptUrl,
+              ruleName: analysis.triggeredByRule
+            })
+          } else {
+            servicesMap.set(key, {
+              service,
+              scripts: [{ url: scriptUrl, ruleName: analysis.triggeredByRule }]
+            })
+          }
+        })
+      } else if (analysis.externalServices && analysis.externalServices.length > 0) {
+        // Fallback to basic service names
+        analysis.externalServices.forEach(serviceName => {
+          const key = serviceName.toLowerCase()
+          if (servicesMap.has(key)) {
+            servicesMap.get(key)!.scripts.push({
+              url: scriptUrl,
+              ruleName: analysis.triggeredByRule
+            })
+          } else {
+            servicesMap.set(key, {
+              service: { name: serviceName },
+              scripts: [{ url: scriptUrl, ruleName: analysis.triggeredByRule }]
+            })
+          }
+        })
+      }
+    })
+
+    return Array.from(servicesMap.values()).sort((a, b) =>
+      a.service.name.localeCompare(b.service.name)
+    )
+  }, [scriptAnalyses])
 
   // Export analyses to Excel
   const exportToExcel = async () => {
@@ -1236,11 +1299,12 @@ export default function Home() {
             </div>
 
             <Tabs defaultValue="concept" className="w-full">
-              <TabsList className="grid w-full grid-cols-4">
+              <TabsList className="grid w-full grid-cols-5">
                 <TabsTrigger value="concept">Concept</TabsTrigger>
                 <TabsTrigger value="rules">Rules ({filteredRules?.length || 0})</TabsTrigger>
                 <TabsTrigger value="dataElements">Data Elements ({filteredDataElements.length})</TabsTrigger>
                 <TabsTrigger value="extensions">Extensions ({filteredExtensions.length})</TabsTrigger>
+                <TabsTrigger value="externalServices">External Services ({allExternalServices.length})</TabsTrigger>
               </TabsList>
 
               <TabsContent value="concept" className="space-y-4">
@@ -2086,6 +2150,188 @@ export default function Home() {
                   <Card>
                     <CardContent className="py-8 text-center text-muted-foreground">
                       No extensions found
+                    </CardContent>
+                  </Card>
+                )}
+              </TabsContent>
+
+              <TabsContent value="externalServices" className="space-y-4">
+                {allExternalServices.length > 0 ? (
+                  <div className="space-y-4">
+                    {/* Summary Card */}
+                    <Card className="bg-gradient-to-br from-orange-50 to-amber-50 dark:from-orange-950 dark:to-amber-950 border-2">
+                      <CardHeader>
+                        <CardTitle className="flex items-center gap-2">
+                          External Services Detected
+                          <span className="text-sm font-normal text-muted-foreground">
+                            ({allExternalServices.length} services across {analyzedScriptsCount} analyzed scripts)
+                          </span>
+                        </CardTitle>
+                        <CardDescription>
+                          Third-party services, tracking pixels, and analytics tools detected in the analyzed scripts
+                        </CardDescription>
+                      </CardHeader>
+                      <CardContent>
+                        <div className="flex flex-wrap gap-2">
+                          {allExternalServices.map(({ service }) => (
+                            <span
+                              key={service.name}
+                              className="inline-flex items-center rounded-full px-3 py-1 text-sm font-medium bg-orange-100 dark:bg-orange-900 text-orange-800 dark:text-orange-200"
+                            >
+                              {service.officialName || service.name}
+                              {service.category && (
+                                <span className="ml-2 text-xs opacity-70">({service.category})</span>
+                              )}
+                            </span>
+                          ))}
+                        </div>
+                      </CardContent>
+                    </Card>
+
+                    {/* Service Details */}
+                    <Accordion type="single" collapsible className="w-full">
+                      {allExternalServices.map(({ service, scripts }, index) => {
+                        const categoryColors: Record<string, string> = {
+                          'Analytics': 'bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200',
+                          'Advertising': 'bg-purple-100 dark:bg-purple-900 text-purple-800 dark:text-purple-200',
+                          'Social Media': 'bg-pink-100 dark:bg-pink-900 text-pink-800 dark:text-pink-200',
+                          'Tag Management': 'bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200',
+                          'Customer Data Platform': 'bg-indigo-100 dark:bg-indigo-900 text-indigo-800 dark:text-indigo-200',
+                          'Personalization': 'bg-amber-100 dark:bg-amber-900 text-amber-800 dark:text-amber-200',
+                          'Session Recording': 'bg-red-100 dark:bg-red-900 text-red-800 dark:text-red-200',
+                          'Heat Maps': 'bg-orange-100 dark:bg-orange-900 text-orange-800 dark:text-orange-200',
+                          'A/B Testing': 'bg-cyan-100 dark:bg-cyan-900 text-cyan-800 dark:text-cyan-200',
+                          'Consent Management': 'bg-teal-100 dark:bg-teal-900 text-teal-800 dark:text-teal-200',
+                        }
+                        const categoryColor = categoryColors[service.category || ''] || 'bg-gray-100 dark:bg-gray-800 text-gray-800 dark:text-gray-200'
+
+                        return (
+                          <AccordionItem key={service.name} value={`service-${index}`}>
+                            <AccordionTrigger>
+                              <div className="flex items-start justify-between w-full gap-4">
+                                <div className="flex flex-col items-start text-left gap-2">
+                                  <div className="flex items-center gap-2">
+                                    <span className="font-semibold text-lg">{service.officialName || service.name}</span>
+                                    {service.vendor && (
+                                      <span className="text-sm text-muted-foreground">by {service.vendor}</span>
+                                    )}
+                                  </div>
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    {service.category && (
+                                      <span className={`inline-flex items-center rounded-md px-2 py-1 text-xs font-medium ${categoryColor}`}>
+                                        {service.category}
+                                      </span>
+                                    )}
+                                    {service.purpose && (
+                                      <span className="text-sm text-muted-foreground">{service.purpose}</span>
+                                    )}
+                                  </div>
+                                </div>
+                                <div className="flex flex-col items-end gap-1 min-w-[100px]">
+                                  <div className="text-xs text-muted-foreground">Found in</div>
+                                  <div className="text-lg font-bold text-orange-600 dark:text-orange-400">
+                                    {scripts.length} {scripts.length === 1 ? 'script' : 'scripts'}
+                                  </div>
+                                </div>
+                              </div>
+                            </AccordionTrigger>
+                            <AccordionContent>
+                              <Card>
+                                <CardContent className="pt-4 space-y-4">
+                                  {/* Description */}
+                                  {service.description && (
+                                    <div>
+                                      <div className="text-sm font-semibold text-muted-foreground mb-1">Description</div>
+                                      <p className="text-sm">{service.description}</p>
+                                    </div>
+                                  )}
+
+                                  {/* Links */}
+                                  {(service.website || service.documentationUrl || service.privacyPolicyUrl) && (
+                                    <div>
+                                      <div className="text-sm font-semibold text-muted-foreground mb-2">Links</div>
+                                      <div className="flex flex-wrap gap-2">
+                                        {service.website && (
+                                          <a
+                                            href={service.website}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md bg-primary/10 text-primary hover:bg-primary/20 text-sm font-medium transition-colors"
+                                          >
+                                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                              <circle cx="12" cy="12" r="10"/>
+                                              <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
+                                              <path d="M2 12h20"/>
+                                            </svg>
+                                            Website
+                                          </a>
+                                        )}
+                                        {service.documentationUrl && (
+                                          <a
+                                            href={service.documentationUrl}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300 hover:bg-blue-200 dark:hover:bg-blue-800 text-sm font-medium transition-colors"
+                                          >
+                                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                              <path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20"/>
+                                            </svg>
+                                            Documentation
+                                          </a>
+                                        )}
+                                        {service.privacyPolicyUrl && (
+                                          <a
+                                            href={service.privacyPolicyUrl}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300 hover:bg-green-200 dark:hover:bg-green-800 text-sm font-medium transition-colors"
+                                          >
+                                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10"/>
+                                            </svg>
+                                            Privacy Policy
+                                          </a>
+                                        )}
+                                      </div>
+                                    </div>
+                                  )}
+
+                                  {/* Scripts using this service */}
+                                  <div>
+                                    <div className="text-sm font-semibold text-muted-foreground mb-2">Found in Scripts</div>
+                                    <div className="space-y-2">
+                                      {scripts.map((script, idx) => (
+                                        <div
+                                          key={idx}
+                                          className="p-2 bg-muted/50 rounded-md"
+                                        >
+                                          <div className="text-xs font-mono text-muted-foreground break-all">
+                                            {script.url}
+                                          </div>
+                                          {script.ruleName && (
+                                            <div className="text-xs text-muted-foreground mt-1">
+                                              Rule: <span className="font-medium">{script.ruleName}</span>
+                                            </div>
+                                          )}
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                </CardContent>
+                              </Card>
+                            </AccordionContent>
+                          </AccordionItem>
+                        )
+                      })}
+                    </Accordion>
+                  </div>
+                ) : (
+                  <Card>
+                    <CardContent className="py-8 text-center text-muted-foreground">
+                      <div className="space-y-2">
+                        <p>No external services detected yet</p>
+                        <p className="text-sm">Analyze scripts to detect external services, tracking pixels, and third-party integrations</p>
+                      </div>
                     </CardContent>
                   </Card>
                 )}
