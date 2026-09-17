@@ -8,7 +8,9 @@ dashboard/.next/
 dashboard/out/
 
 # Environment variables
+.env
 .env.local
+dashboard/.env
 dashboard/.env.local
 
 # OS files
